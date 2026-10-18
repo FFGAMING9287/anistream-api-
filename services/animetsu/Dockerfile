@@ -2,7 +2,7 @@ FROM golang:1.22-alpine AS build
 WORKDIR /app
 RUN apk add --no-cache git
 RUN git clone --depth 1 https://github.com/ullamua/animetsu-api.git .
-RUN CGO_ENABLED=0 go build -o animetsu-api .
+RUN CGO_ENABLED=0 go build -o animetsu-api ./cmd/server
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
