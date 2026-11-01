@@ -211,6 +211,21 @@ export const BROWSE_GENRES = [
   "Ecchi",
 ] as const;
 
+type CuratedHomeData = {
+  spotlight: CatalogAnime[];
+  trending: CatalogAnime[];
+  popular: CatalogAnime[];
+  recent: CatalogAnime[];
+  upcoming: CatalogAnime[];
+  season: CatalogAnime[];
+  top: CatalogAnime[];
+  genres: string[];
+};
+
+const CURATED_HOME_CACHE_MS = 10 * 60 * 1000;
+let curatedHomeCache: { expiresAt: number; data: CuratedHomeData } | null = null;
+let curatedHomeInFlight: Promise<CuratedHomeData> | null = null;
+
 async function fetchCatalogPage(
   sort: string,
   status?: string,
@@ -284,16 +299,71 @@ export async function anilistByGenre(genre: string) {
 }
 
 export async function anilistCuratedHome() {
-  const [spotlight, trending, popular, recent, upcoming, season, top] = await Promise.all([
-    anilistSpotlight(),
-    anilistTrending(),
-    anilistPopular(),
-    anilistRecent(),
-    anilistUpcoming(),
-    anilistCatalogSeason(),
-    anilistCatalogTop(),
-  ]);
-  return { spotlight, trending, popular, recent, upcoming, season, top, genres: [...BROWSE_GENRES] };
+  if (curatedHomeCache && Date.now() < curatedHomeCache.expiresAt) {
+    return curatedHomeCache.data;
+  }
+  if (curatedHomeInFlight) return curatedHomeInFlight;
+
+  const load = (async (): Promise<CuratedHomeData> => {
+    const page = (alias: string, perPage: number, sort: string, status?: string) => {
+      const statusFilter = status ? `, status: ${status}` : "";
+      return `${alias}: Page(page: 1, perPage: ${perPage}) {
+        media(type: ANIME, sort: ${sort}${statusFilter}, isAdult: false) {
+          ${MEDIA_FIELDS}
+        }
+      }`;
+    };
+
+    try {
+      const { season, year } = currentSeasonYear();
+      const data = await anilistQuery<{
+        spotlight: { media: AniListMedia[] };
+        trending: { media: AniListMedia[] };
+        popular: { media: AniListMedia[] };
+        recent: { media: AniListMedia[] };
+        upcoming: { media: AniListMedia[] };
+        season: { media: AniListMedia[] };
+        top: { media: AniListMedia[] };
+      }>(
+        `query ($season: MediaSeason, $year: Int) {
+          ${page("spotlight", 10, "TRENDING_DESC")}
+          ${page("trending", 18, "TRENDING_DESC")}
+          ${page("popular", 18, "POPULARITY_DESC")}
+          ${page("recent", 18, "START_DATE_DESC", "RELEASING")}
+          ${page("upcoming", 18, "POPULARITY_DESC", "NOT_YET_RELEASED")}
+          season: Page(page: 1, perPage: 18) {
+            media(season: $season, seasonYear: $year, type: ANIME, sort: POPULARITY_DESC, isAdult: false) {
+              ${MEDIA_FIELDS}
+            }
+          }
+          ${page("top", 18, "SCORE_DESC")}
+        }`,
+        { season, year }
+      );
+      const result: CuratedHomeData = {
+        spotlight: mapCatalogList(data.spotlight.media),
+        trending: mapCatalogList(data.trending.media),
+        popular: mapCatalogList(data.popular.media),
+        recent: mapCatalogList(data.recent.media),
+        upcoming: mapCatalogList(data.upcoming.media),
+        season: mapCatalogList(data.season.media),
+        top: mapCatalogList(data.top.media),
+        genres: [...BROWSE_GENRES],
+      };
+      curatedHomeCache = { data: result, expiresAt: Date.now() + CURATED_HOME_CACHE_MS };
+      return result;
+    } catch (error) {
+      if (curatedHomeCache) return curatedHomeCache.data;
+      throw error;
+    }
+  })();
+
+  curatedHomeInFlight = load;
+  try {
+    return await load;
+  } finally {
+    curatedHomeInFlight = null;
+  }
 }
 
 export async function anilistIdFromMal(malId: string): Promise<number | null> {
