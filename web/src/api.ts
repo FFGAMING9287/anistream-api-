@@ -231,9 +231,15 @@ export const api = {
     get<{ sources: { url: string }[]; subtitles?: { url: string; lang: string }[] }>(
       `/api/watch/${episodeId}/fallback?provider=${provider}`
     ),
-  downloadSearch: (q: string) => get<unknown>(`/api/downloads/search?q=${encodeURIComponent(q)}`),
-  downloads: (id: string, ep: string, quality = "1080p") =>
-    get<unknown>(
-      `/api/downloads/${id}/${ep}?quality=${quality}&source=pahe&group=SubsPlease&type=sub`
-    ),
+  downloadSearch: (q: string) =>
+    get<{
+      results?: { id: string; detailPath: string; title: string; poster?: string }[];
+      available?: boolean;
+    }>(`/api/downloads/search?q=${encodeURIComponent(q)}`),
+  downloads: (id: string, ep: string, detailPath: string, season = 1) => {
+    const params = new URLSearchParams({ detailPath, season: String(season) });
+    return get<unknown>(
+      `/api/downloads/${encodeURIComponent(id)}/${encodeURIComponent(ep)}?${params}`
+    );
+  },
 };

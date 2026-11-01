@@ -23,6 +23,7 @@ services:
   animetsu:
     build:
       context: ./services/animetsu-src
+    profiles: ["legacy"]
     restart: unless-stopped
     expose:
       - "8080"
@@ -37,7 +38,7 @@ services:
     environment:
       PORT: 8787
       JIKAN_URL: https://api.jikan.moe/v4
-      ANIMETSU_URL: http://animetsu:8080
+      MOVIEBOX_URL: ${MOVIEBOX_URL:-https://movie-box-api.co08.art}
       CONSUMET_URL: http://consumet:3000
       MIRURO_URL: http://miruro:8000
       MIRURO_API_KEY: ${MIRURO_API_KEY:-anistream-local-miruro-key}
@@ -48,7 +49,6 @@ services:
     depends_on:
       - miruro
       - consumet
-      - animetsu
 
   web:
     build:

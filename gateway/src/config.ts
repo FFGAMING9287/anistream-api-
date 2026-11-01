@@ -4,6 +4,7 @@ export const config = {
   aniwatchUrl: process.env.ANIWATCH_URL ?? "http://localhost:4000",
   consumetUrl: process.env.CONSUMET_URL ?? "http://localhost:3000",
   animetsuUrl: process.env.ANIMETSU_URL ?? "http://localhost:8080",
+  movieboxUrl: process.env.MOVIEBOX_URL ?? "https://movie-box-api.co08.art",
   anipubUrl: process.env.ANIPUB_URL ?? "https://anipub.xyz",
   miruroUrl: process.env.MIRURO_URL ?? "http://localhost:8000",
   miruroApiKey: process.env.MIRURO_API_KEY ?? "anistream-local-miruro-key",

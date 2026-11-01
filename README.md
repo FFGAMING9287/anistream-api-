@@ -32,9 +32,9 @@ AniStream separates concerns into three layers:
 |-------|----------------|
 | **Presentation** | React SPA served by nginx; routing, source picker, HLS/embed player, browse UX |
 | **Orchestration** | Hono gateway: metadata fusion, source discovery, stream resolution, CORS/HLS proxies |
-| **Providers** | Sidecar services and external APIs: Miruro (HLS), AniPub (embed), Consumet scrapers, Animetsu (downloads) |
+| **Providers** | Sidecars and external APIs: Miruro (HLS), AniPub (embed), Consumet scrapers, MovieBox (MP4 streaming/downloads) |
 
-The gateway is the single integration point. The web client never talks to Miruro, Consumet, or Animetsu directly. All streaming URLs that require special headers or bypass browser CORS are rewritten through gateway proxies using `PUBLIC_URL`.
+The gateway is the single integration point for catalog and source lookup. The web client does not call MovieBox search directly; selected signed MP4 sources play in the browser, while downloads use MovieBox's MP4 proxy. MovieBox is optional, with catalog coverage and availability dependent on that external service. The legacy Animetsu sidecar is no longer used by the downloads routes.
 
 **Primary design goals**
 
@@ -71,7 +71,7 @@ flowchart TB
     subgraph Sidecars
       MR[miruro :8000]
       CS[consumet :3000]
-      AM[animetsu :8080]
+      AM[animetsu :8080 legacy]
     end
   end
 
@@ -108,7 +108,8 @@ flowchart TB
 | **gateway** | Node 20, Hono | internal `8787` | Unified REST API, provider orchestration, proxies |
 | **miruro** | Python, Miruro-API | `8000` | Primary HLS catalog and stream resolution (AniList IDs) |
 | **consumet** | Node 20, `@consumet/extensions` | `3000` | Optional Consumet-compatible scraper sidecar |
-| **animetsu** | Go | `8080` | Download search and optional watch endpoints |
+| **MovieBox API** | External HTTPS | — | Optional title search and signed MP4 playback/download links |
+| **animetsu** | Go | `8080` | Legacy sidecar retained in Compose; not used by current gateway download routes |
 
 All Compose services use `restart: unless-stopped` so they recover after Docker Desktop or host reboot (when Docker is configured to start on login).
 
@@ -144,8 +145,8 @@ In production Docker builds, `VITE_API_URL` is empty so the browser uses same-or
 │  proxy/image · proxy/resource (HLS rewrite)                  │
 └─────┬──────────┬──────────┬──────────┬──────────────────────┘
       │          │          │          │
-   Miruro     AniPub    Consumet    Animetsu
-   (HLS)      (embed)   (scrapers)  (downloads)
+   Miruro     AniPub    Consumet    MovieBox API
+   (HLS)      (embed)   (scrapers)  (MP4 stream/download)
       │          │          │
    Jikan · AniList · Zenshin (metadata only)
 ```
@@ -309,12 +310,16 @@ Base URL: `http://localhost/api` (Docker) or `http://localhost:8787/api` (Vite d
 | `GET` | `/api/watch/:episodeId/sources` | Per-episode playable sources |
 | `GET` | `/api/watch/:episodeId?provider=` | Resolved stream (HLS proxy, embed, or direct) |
 
-### Downloads (Animetsu)
+### MovieBox streaming and downloads
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/downloads/search?q=` | Search download catalog |
-| `GET` | `/api/downloads/:id/:ep` | DDL / torrent links |
+| `GET` | `/api/downloads/search?q=` | Search the MovieBox catalog; returns `id` and `detailPath` |
+| `GET` | `/api/downloads/:id?detailPath=` | Fetch title metadata |
+| `GET` | `/api/downloads/:id/:ep?detailPath=&season=` | Get signed MP4 source options for an episode |
+| `GET` | `/api/downloads/:id/:ep/watch?detailPath=&season=` | Same source lookup for playback |
+
+The Anime Detail page shows MovieBox stream/download actions only when the title search finds a close match. Search coverage is not complete; the existing Miruro/AniPub routes remain separate. The selected direct MP4 source can be played in the in-page player or opened through MovieBox's MP4 download proxy.
 
 ### Proxies
 
@@ -357,7 +362,8 @@ Copy `.env.example` to `.env` in the project root. Docker Compose loads this fil
 | `MIRURO_URL` | `http://miruro:8000` (Compose) | Miruro sidecar base URL |
 | `MIRURO_API_KEY` | `anistream-local-miruro-key` | Miruro `x-api-key` header |
 | `CONSUMET_URL` | `http://consumet:3000` | Consumet sidecar; gateway falls back to in-process if unreachable |
-| `ANIMETSU_URL` | `http://animetsu:8080` | Animetsu downloads API |
+| `MOVIEBOX_URL` | `https://movie-box-api.co08.art` | MovieBox API base URL; external service may rate-limit or have incomplete catalog coverage |
+| `ANIMETSU_URL` | `http://animetsu:8080` | Legacy sidecar setting; current gateway routes do not use it |
 | `ANIPUB_URL` | `https://anipub.xyz` | AniPub embed host |
 | `STREAM_PREFER_EMBED` | `true` | Prefer AniPub in unified search (recommended on VPS) |
 | `ENABLE_ANIMEPAHE` | `false` | Opt-in AnimePahe scraper |
@@ -424,11 +430,11 @@ npm start
 
 ### Mode B — Vite hot reload (UI development)
 
-Run sidecars in Docker; gateway and web locally for fast refresh.
+Run required sidecars in Docker; gateway and web locally for fast refresh. The legacy Animetsu container is not required for downloads.
 
 ```bash
-# Terminal 1 — sidecars only
-docker compose up -d miruro consumet animetsu
+# Terminal 1 — required sidecars only
+docker compose up -d miruro consumet
 
 # Terminal 2 — gateway
 cd gateway && npm run dev
@@ -537,7 +543,7 @@ anistream/
 | Only one source for new episode | AniPub upload lag vs Miruro | Normal for airing shows; check `latestEpisode` badges |
 | `502` on `/proxy/resource` | Upstream CDN block | Use embed source; gateway auto-falls back when possible |
 | AniList poster CORS errors | Direct CDN hit from browser | Ensure gateway is rebuilt; posters should use `/proxy/image` |
-| Downloads search empty | Animetsu container not running | `docker compose up -d animetsu` |
+| MovieBox actions missing | No close title match, or MovieBox is rate-limited/unavailable | Try another title spelling; check `MOVIEBOX_URL` and MovieBox availability |
 | `http://localhost` blank | Web container not ready | `npm run logs`; wait for gateway health |
 | Port 80 in use | Another service on 80 | Stop IIS/sk conflicting service or change Compose web port mapping |
 

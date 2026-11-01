@@ -7,6 +7,7 @@ import { LuxuryButton } from "../components/ui/LuxuryButton";
 import { MetricCard } from "../components/ui/MetricCard";
 import { SourcePicker, type SourceOption } from "../components/SourcePicker";
 import { EpisodeList } from "../components/EpisodeList";
+import { VideoPlayer } from "../components/VideoPlayer";
 import { api, CatalogSource, Episode, JikanAnime } from "../api";
 import { proxyImageUrl } from "../lib/proxyImage";
 interface AnimeInfo {
@@ -20,6 +21,12 @@ interface AnimeInfo {
     episodes: { sub: number; dub: number; planned?: number };
   };
   moreInfo: Record<string, string | string[]>;
+}
+
+interface MovieBoxMatch {
+  id: string;
+  detailPath: string;
+  title: string;
 }
 
 export default function AnimePage() {
@@ -44,7 +51,8 @@ export default function AnimePage() {
     { relation: string; mal_id: number; name: string }[]
   >([]);
   const [error, setError] = useState<string | null>(null);
-  const [downloadId, setDownloadId] = useState<string | null>(null);
+  const [movieBoxMatch, setMovieBoxMatch] = useState<MovieBoxMatch | null>(null);
+  const [movieBoxStream, setMovieBoxStream] = useState<{ url: string; title: string } | null>(null);
   const [streamMeta, setStreamMeta] = useState<{ provider?: string; category?: string } | null>(null);
   const [zenshinPlanned, setZenshinPlanned] = useState<number | null>(null);
   const [checkingNew, setCheckingNew] = useState(false);
@@ -53,6 +61,27 @@ export default function AnimePage() {
   const sourceBaselineRef = useRef<Map<string, { episodes: number; latestEpisode: number }>>(
     new Map()
   );
+
+  useEffect(() => {
+    const title = info?.name;
+    if (!title) {
+      setMovieBoxMatch(null);
+      return;
+    }
+    let cancelled = false;
+    setMovieBoxMatch(null);
+    api.downloadSearch(title)
+      .then((response) => {
+        if (cancelled) return;
+        setMovieBoxMatch(findMovieBoxMatch(title, response.results ?? []));
+      })
+      .catch(() => {
+        if (!cancelled) setMovieBoxMatch(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [info?.name]);
 
   const POLL_MS = 5 * 60 * 1000;
 
@@ -97,14 +126,6 @@ export default function AnimePage() {
         category: eps.category ?? undefined,
       });
       setStreamError(null);
-
-      api.downloadSearch(anime.name)
-        .then((dl) => {
-          if (!dl || typeof dl !== "object") return;
-          const results = (dl as { data?: { id?: string }[] }).data;
-          if (results?.[0]?.id) setDownloadId(results[0].id);
-        })
-        .catch(() => {});
     },
     [malId, anilistId]
   );
@@ -273,7 +294,8 @@ export default function AnimePage() {
       setError(null);
       setStreamError(null);
       setEpisodes([]);
-      setDownloadId(null);
+      setMovieBoxMatch(null);
+      setMovieBoxStream(null);
       setStreamMeta(null);
       setZenshinPlanned(null);
 
@@ -449,7 +471,7 @@ export default function AnimePage() {
               <MetricCard label="Rating" value={info.stats.rating || mal?.score?.toFixed(1) || "—"} />
               <MetricCard label="Streamable" value={streamableCount || "—"} />
               <MetricCard label="Series Total" value={seriesTotal || "—"} />
-              <MetricCard label="Downloads" value={downloadId ? "Ready" : "—"} />
+              <MetricCard label="Downloads" value={movieBoxMatch ? "Ready" : "—"} />
             </div>
 
             {seriesTotal > streamableCount && streamableCount > 0 && (
@@ -562,8 +584,20 @@ export default function AnimePage() {
                   <LuxuryButton>Watch Episode 1</LuxuryButton>
                 </Link>
               )}
-              {canStream && downloadId && (
-                <DownloadButton animetsuId={downloadId} ep={String(firstEp!.number)} label="Download Ep 1" />
+              {movieBoxMatch && firstEp && (
+                <>
+                  <MovieBoxActionButton
+                    match={movieBoxMatch}
+                    ep={firstEp.number}
+                    action="stream"
+                    onStream={setMovieBoxStream}
+                  />
+                  <MovieBoxActionButton
+                    match={movieBoxMatch}
+                    ep={firstEp.number}
+                    action="download"
+                  />
+                </>
               )}
               {!canStream && !sourcesLoading && catalogSourceOptions.length === 0 && (
                 <LuxuryButton
@@ -577,6 +611,21 @@ export default function AnimePage() {
           </EditorialCard>
         </div>
       </div>
+
+      {movieBoxStream && (
+        <EditorialCard tagline="MovieBox source" title={movieBoxStream.title} className="mt-10">
+          <div className="flex justify-end mb-3">
+            <button
+              type="button"
+              className="badge-pill"
+              onClick={() => setMovieBoxStream(null)}
+            >
+              Close player
+            </button>
+          </div>
+          <VideoPlayer src={movieBoxStream.url} poster={info.poster} />
+        </EditorialCard>
+      )}
 
       {episodes.length > 0 && streamId && (
         <EditorialCard
@@ -622,29 +671,45 @@ function malFromJikan(mal: JikanAnime, fallbackId: string): AnimeInfo {
   };
 }
 
-function DownloadButton({
-  animetsuId,
+function MovieBoxActionButton({
+  match,
   ep,
-  label = "Save",
+  action,
+  onStream,
 }: {
-  animetsuId: string;
-  ep: string;
-  label?: string;
+  match: MovieBoxMatch;
+  ep: number;
+  action: "stream" | "download";
+  onStream?: (source: { url: string; title: string }) => void;
 }) {
   const [loading, setLoading] = useState(false);
 
-  async function handleDownload() {
+  async function handleAction() {
     setLoading(true);
     try {
-      const data = await api.downloads(animetsuId, ep);
-      const links = extractDownloadLinks(data);
-      if (links[0]) {
-        window.open(links[0], "_blank");
+      const data = await api.downloads(match.id, String(ep), match.detailPath);
+      const payload = data as {
+        data?: {
+          downloads?: { url?: string; resolution?: number; vipLocked?: boolean }[];
+        };
+      };
+      const sources = (payload.data?.downloads ?? [])
+        .filter((item) => item.url?.startsWith("https://") && !item.vipLocked)
+        .sort((a, b) => (b.resolution ?? 0) - (a.resolution ?? 0));
+      const source = sources[0];
+      if (!source?.url) throw new Error("No playable MovieBox source for this episode.");
+
+      if (action === "stream") {
+        onStream?.({ url: source.url, title: `${match.title} — Episode ${ep}` });
       } else {
-        alert("No download link available for this episode.");
+        const filename = `${match.title.replace(/[^a-z0-9_-]+/gi, "_")}_ep${ep}_${source.resolution ?? "HD"}p.mp4`;
+        const downloadUrl = new URL("https://movie-box-api.co08.art/api/download-mp4");
+        downloadUrl.searchParams.set("url", source.url);
+        downloadUrl.searchParams.set("filename", filename);
+        window.location.assign(downloadUrl.toString());
       }
     } catch {
-      alert("Download unavailable. Try streaming instead.");
+      alert(action === "stream" ? "MovieBox stream unavailable for this episode." : "MovieBox download unavailable.");
     } finally {
       setLoading(false);
     }
@@ -655,9 +720,9 @@ function DownloadButton({
       variant="secondary"
       loading={loading}
       className="!py-2 !px-4 !text-[0.65rem]"
-      onClick={handleDownload}
+      onClick={handleAction}
     >
-      {label}
+      {action === "stream" ? `MovieBox · Stream Ep ${ep}` : `MovieBox · Download Ep ${ep}`}
     </LuxuryButton>
   );
 }
@@ -690,20 +755,25 @@ function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, "").trim();
 }
 
-function extractDownloadLinks(data: unknown): string[] {
-  if (!data || typeof data !== "object") return [];
-  const links: string[] = [];
-
-  function walk(o: unknown) {
-    if (!o || typeof o !== "object") return;
-    for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
-      if (typeof v === "string" && (k.includes("url") || k.includes("link") || v.startsWith("http"))) {
-        if (v.startsWith("http")) links.push(v);
-      } else if (typeof v === "object") {
-        walk(v);
-      }
-    }
-  }
-  walk(data);
-  return [...new Set(links)];
+function findMovieBoxMatch(
+  query: string,
+  results: { id: string; detailPath: string; title: string }[]
+): MovieBoxMatch | null {
+  const normalize = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/\[[^\]]*\]|\([^)]*\)/g, " ")
+      .replace(/[^a-z0-9]+/g, "")
+      .trim();
+  const normalizedQuery = normalize(query);
+  if (!normalizedQuery) return null;
+  const match = results.find((item) => {
+    const normalizedTitle = normalize(item.title);
+    return (
+      normalizedTitle === normalizedQuery ||
+      normalizedTitle.startsWith(normalizedQuery) ||
+      normalizedQuery.startsWith(normalizedTitle)
+    );
+  });
+  return match ? { id: match.id, detailPath: match.detailPath, title: match.title } : null;
 }

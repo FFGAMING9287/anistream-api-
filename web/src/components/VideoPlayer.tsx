@@ -125,7 +125,19 @@ export function VideoPlayer({
       return false;
     };
 
-    if (Hls.isSupported()) {
+    const isHls = /\.m3u8(?:$|[?#])/i.test(activeSrc);
+    const onMediaError = () => {
+      if (tryFallback()) return;
+      setError("Playback error: network");
+      setLoading(false);
+    };
+
+    if (!isHls) {
+      video.src = activeSrc;
+      video.addEventListener("loadedmetadata", onReady);
+      video.addEventListener("error", onMediaError);
+      video.load();
+    } else if (Hls.isSupported()) {
       hls = new Hls({ enableWorker: true });
       hls.loadSource(activeSrc);
       hls.attachMedia(video);
@@ -139,15 +151,7 @@ export function VideoPlayer({
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = activeSrc;
       video.addEventListener("loadedmetadata", onReady);
-      video.addEventListener(
-        "error",
-        () => {
-          if (tryFallback()) return;
-          setError("Playback error: network");
-          setLoading(false);
-        },
-        { once: true }
-      );
+      video.addEventListener("error", onMediaError, { once: true });
     } else {
       setError("HLS not supported in this browser");
       setLoading(false);
@@ -156,6 +160,7 @@ export function VideoPlayer({
     return () => {
       hls?.destroy();
       video.removeEventListener("loadedmetadata", onReady);
+      video.removeEventListener("error", onMediaError);
       trackRefs.current = [];
     };
   }, [activeSrc, embed, attachSubtitles, fallbackSrc]);

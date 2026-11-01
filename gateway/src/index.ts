@@ -11,7 +11,7 @@ import { withTimeout } from "./timeout.js";
 const SEARCH_TIMEOUT_MS = 25_000;
 import * as metadata from "./services/metadata.js";
 import * as consumet from "./services/consumet-adapter.js";
-import * as animetsu from "./services/animetsu.js";
+import * as moviebox from "./services/moviebox.js";
 import * as anipub from "./services/anipub.js";
 import * as miruro from "./services/miruro.js";
 import * as anilist from "./services/anilist.js";
@@ -508,21 +508,23 @@ app.get("/api/consumet/search", async (c) => {
   return c.json({ results: hit.value.results, provider: hit.provider });
 });
 
-// ── Animetsu downloads ────────────────────────────────────────────
+// ── MovieBox episode streams and downloads ────────────────────────
 
 app.get("/api/downloads/search", async (c) => {
   const q = c.req.query("q");
   if (!q) return c.json({ error: "q required" }, 400);
   try {
-    return c.json(await animetsu.animetsuSearch(q));
+    return c.json(await moviebox.movieboxSearch(q));
   } catch {
-    return c.json({ results: [], animetsuAvailable: false });
+    return c.json({ results: [], provider: "moviebox", available: false });
   }
 });
 
 app.get("/api/downloads/:id", async (c) => {
+  const detailPath = c.req.query("detailPath");
+  if (!detailPath) return c.json({ error: "detailPath required" }, 400);
   try {
-    return c.json(await animetsu.animetsuAnime(c.req.param("id")));
+    return c.json(await moviebox.movieboxDetail(c.req.param("id"), detailPath));
   } catch (e) {
     return c.json({ error: String(e) }, 502);
   }
@@ -530,15 +532,16 @@ app.get("/api/downloads/:id", async (c) => {
 
 app.get("/api/downloads/:id/:ep", async (c) => {
   const { id, ep } = c.req.param();
-  const quality = c.req.query("quality") ?? "1080p";
-  const source = c.req.query("source") ?? "pahe";
-  const group = c.req.query("group") ?? "SubsPlease";
-  const type = c.req.query("type") ?? "sub";
+  const detailPath = c.req.query("detailPath");
+  if (!detailPath) return c.json({ error: "detailPath required" }, 400);
+  const season = Number(c.req.query("season") ?? "1");
+  const episode = Number(ep);
+  if (!Number.isInteger(season) || season < 1 || !Number.isInteger(episode) || episode < 1) {
+    return c.json({ error: "season and episode must be positive integers" }, 400);
+  }
 
   try {
-    return c.json(
-      await animetsu.animetsuDownloads(id, ep, { quality, source, group, type })
-    );
+    return c.json(await moviebox.movieboxEpisodeSources(id, detailPath, season, episode));
   } catch (e) {
     return c.json({ error: String(e) }, 502);
   }
@@ -546,9 +549,15 @@ app.get("/api/downloads/:id/:ep", async (c) => {
 
 app.get("/api/downloads/:id/:ep/watch", async (c) => {
   const { id, ep } = c.req.param();
-  const sourceType = c.req.query("source_type") ?? "sub";
+  const detailPath = c.req.query("detailPath");
+  if (!detailPath) return c.json({ error: "detailPath required" }, 400);
+  const season = Number(c.req.query("season") ?? "1");
+  const episode = Number(ep);
+  if (!Number.isInteger(season) || season < 1 || !Number.isInteger(episode) || episode < 1) {
+    return c.json({ error: "season and episode must be positive integers" }, 400);
+  }
   try {
-    return c.json(await animetsu.animetsuWatch(id, ep, sourceType));
+    return c.json(await moviebox.movieboxEpisodeSources(id, detailPath, season, episode));
   } catch (e) {
     return c.json({ error: String(e) }, 502);
   }
