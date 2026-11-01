@@ -107,25 +107,32 @@ export default function AnimePage() {
             ? Number(anilistId)
             : undefined;
 
-      const [raw, eps] = await Promise.all([
-        api.animeInfo(activeStreamId, activeProvider),
-        api.episodes(activeStreamId, activeProvider, {
-          malId: Number.isFinite(resolvedMal) ? resolvedMal : undefined,
-          anilistId: Number.isFinite(resolvedAnilist) ? resolvedAnilist : undefined,
-        }),
-      ]);
-
+      const raw = await api.animeInfo(activeStreamId, activeProvider);
       const anime = raw.anime.info as unknown as AnimeInfo;
       setStreamId(activeStreamId);
       setProvider(activeProvider);
       setInfo(anime);
-      setEpisodes(eps.episodes);
-      setZenshinPlanned(eps.zenshin?.planned ?? null);
-      setStreamMeta({
-        provider: eps.streamProvider ?? activeProvider,
-        category: eps.category ?? undefined,
-      });
-      setStreamError(null);
+
+      try {
+        const eps = await api.episodes(activeStreamId, activeProvider, {
+          malId: Number.isFinite(resolvedMal) ? resolvedMal : undefined,
+          anilistId: Number.isFinite(resolvedAnilist) ? resolvedAnilist : undefined,
+        });
+        setEpisodes(eps.episodes);
+        setZenshinPlanned(eps.zenshin?.planned ?? null);
+        setStreamMeta({
+          provider: eps.streamProvider ?? activeProvider,
+          category: eps.category ?? undefined,
+        });
+        setStreamError(null);
+      } catch {
+        setEpisodes([]);
+        setZenshinPlanned(null);
+        setStreamMeta({ provider: activeProvider });
+        setStreamError("This provider's episode list is temporarily blocked. Try Find sources or use MovieBox if available.");
+      }
+
+      return anime.name;
     },
     [malId, anilistId]
   );
@@ -338,9 +345,9 @@ export default function AnimePage() {
           throw new Error("Anime not found");
         }
 
-        await loadStreamSource(activeStreamId, activeProvider);
+        const streamTitle = await loadStreamSource(activeStreamId, activeProvider);
         if (cancelled) return;
-        const title = malData?.title_english || malData?.title;
+        const title = malData?.title_english || malData?.title || streamTitle;
         if (title) void discoverSources(title);
       } catch (e) {
         if (cancelled) return;
@@ -584,17 +591,17 @@ export default function AnimePage() {
                   <LuxuryButton>Watch Episode 1</LuxuryButton>
                 </Link>
               )}
-              {movieBoxMatch && firstEp && (
+              {movieBoxMatch && (
                 <>
                   <MovieBoxActionButton
                     match={movieBoxMatch}
-                    ep={firstEp.number}
+                    ep={firstEp?.number ?? 1}
                     action="stream"
                     onStream={setMovieBoxStream}
                   />
                   <MovieBoxActionButton
                     match={movieBoxMatch}
-                    ep={firstEp.number}
+                    ep={firstEp?.number ?? 1}
                     action="download"
                   />
                 </>
@@ -647,6 +654,9 @@ export default function AnimePage() {
 }
 
 function friendlyStreamError(msg: string): string {
+  if (/403|forbidden|cloudflare|just a moment/i.test(msg)) {
+    return "This streaming provider is temporarily blocking episode requests. Try Find sources or use MovieBox if available.";
+  }
   if (msg.includes("500") && msg.toLowerCase().includes("internal server error")) {
     return "That stream host returned a server error. Pick a different source above and try again.";
   }
