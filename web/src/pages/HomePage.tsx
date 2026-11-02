@@ -9,11 +9,12 @@ import { EditorialCard } from "../components/ui/EditorialCard";
 import { LuxuryButton } from "../components/ui/LuxuryButton";
 import { api, CuratedHome } from "../api";
 import { formatPremiereDate } from "../lib/formatAirDate";
+import { cacheHomeCatalog, getInitialHomeCatalog } from "../lib/homeCatalogFallback";
 
 export default function HomePage() {
   const navigate = useNavigate();
-  const [data, setData] = useState<CuratedHome | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<CuratedHome>(() => getInitialHomeCatalog());
+  const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   function load() {
@@ -21,7 +22,10 @@ export default function HomePage() {
     setLoadError(null);
     api
       .curatedHome()
-      .then(setData)
+      .then((catalog) => {
+        cacheHomeCatalog(catalog);
+        setData(catalog);
+      })
       .catch((e) => setLoadError(String(e)))
       .finally(() => setLoading(false));
   }
@@ -45,28 +49,18 @@ export default function HomePage() {
         <SearchBar onSearch={(q) => navigate(`/search?q=${encodeURIComponent(q)}`)} />
       </div>
 
-      {loading ? (
-        <div className="home-sections">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="space-y-3">
-              <div className="loading-shimmer h-5 w-48" />
-              <div className="flex gap-3 overflow-hidden">
-                {[1, 2, 3, 4, 5, 6].map((j) => (
-                  <div key={j} className="loading-shimmer h-[220px] w-[150px] shrink-0" />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : loadError ? (
-        <EditorialCard title="Could not load catalog" className="mt-8">
-          <p className="font-sans text-sm text-taupe mb-4">{loadError}</p>
-          <LuxuryButton variant="secondary" onClick={load}>
-            Retry
+      {loadError && (
+        <EditorialCard title="Catalog temporarily unavailable" className="mt-8">
+          <p className="font-sans text-sm text-taupe mb-4">
+            Catalog services are temporarily unavailable or rate-limiting requests. Showing saved or built-in picks for now.
+          </p>
+          <LuxuryButton variant="secondary" loading={loading} onClick={load}>
+            Retry catalog
           </LuxuryButton>
         </EditorialCard>
-      ) : data ? (
-        <div className="home-sections">
+      )}
+
+      <div className="home-sections">
           <ContinueWatchingRow />
 
           <CatalogRow
@@ -120,8 +114,7 @@ export default function HomePage() {
           />
 
           <GenreRail genres={data.genres} />
-        </div>
-      ) : null}
+      </div>
     </Shell>
   );
 }

@@ -101,10 +101,15 @@ export async function metadataRelations(malId: string) {
 }
 
 export async function browseCurated() {
+  let anilistError: unknown;
   try {
     return await anilist.anilistCuratedHome();
-  } catch {
-    const home = await browseHome();
+  } catch (error) {
+    anilistError = error;
+  }
+
+  try {
+    const home = await jikan.jikanHome();
     const season = home.season.map((a) => ({
       ...a,
       anilist_id: 0,
@@ -125,6 +130,8 @@ export async function browseCurated() {
       top,
       genres: [...anilist.BROWSE_GENRES],
     };
+  } catch {
+    throw anilistError ?? new Error("AniList and Jikan home catalogs are unavailable");
   }
 }
 
