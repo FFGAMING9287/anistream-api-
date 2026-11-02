@@ -26,13 +26,20 @@ export function EpisodeList({
   const [view, setView] = useState<ViewMode>("grid");
   const pageSize = view === "grid" ? GRID_PAGE_SIZE : LIST_PAGE_SIZE;
   const metadataOnly = episodes.length > 0 && episodes.every((ep) => ep.metadataOnly);
+  const offlinePlaceholders =
+    metadataOnly && episodes.every((ep) => ep.metadataSource === "local-placeholder");
+  const cachedGuide = metadataOnly && episodes.every((ep) => ep.metadataSource === "local-cache");
 
   return (
     <div className="episode-list">
       <div className="episode-list__toolbar">
         <p className="episode-list__hint font-sans text-xs text-taupe m-0">
-          {metadataOnly
-            ? "Jikan episode guide only — these entries do not include playable streams."
+          {offlinePlaceholders
+            ? "Offline placeholders use the known series count only; episode titles, dates, and streams are not verified."
+            : cachedGuide
+              ? "Saved episode metadata from this device. These entries do not include playable streams."
+              : metadataOnly
+                ? "Jikan episode guide only — these entries do not include playable streams."
             : view === "grid"
               ? "Tap an episode to watch. Switch to list view for synopses."
               : "Detailed list with descriptions — fewer episodes per page."}
@@ -111,7 +118,7 @@ function EpisodeTile({ ep, href }: { ep: Episode; href: string | null }) {
       <span className="episode-tile__meta">
         {!streamable && (
           <span className="episode-tile__tag">
-            {ep.metadataOnly ? "Metadata only" : episodeReleaseLabel(ep.airDate)}
+            {ep.metadataOnly ? metadataGuideLabel(ep) : episodeReleaseLabel(ep.airDate)}
           </span>
         )}
         {ep.isFiller && <span className="episode-tile__tag">Filler</span>}
@@ -166,7 +173,7 @@ function EpisodeDetailRow({
             Ep {String(ep.number).padStart(2, "0")}
           </span>
           {!streamable && (
-            <span className="badge-pill">{ep.metadataOnly ? "Metadata only" : "Catalog only"}</span>
+            <span className="badge-pill">{ep.metadataOnly ? metadataGuideLabel(ep) : "Catalog only"}</span>
           )}
           {ep.isFiller && <span className="badge-pill">Filler</span>}
           {ep.isRecap && <span className="badge-pill">Recap</span>}
@@ -187,7 +194,7 @@ function EpisodeDetailRow({
             (streamable
               ? "No episode synopsis available yet."
               : ep.metadataOnly
-                ? "Jikan metadata only. Choose a streaming source to watch this episode."
+                ? metadataGuideDescription(ep)
                 : "Scheduled in catalog — not uploaded yet.")}
         </p>
       </div>
@@ -200,12 +207,32 @@ function EpisodeDetailRow({
           </Link>
         ) : (
           <span className="font-sans text-[0.65rem] uppercase tracking-widest text-taupe px-2">
-            {episodeReleaseLabel(ep.airDate)}
+            {ep.metadataSource === "local-placeholder"
+              ? "Offline"
+              : ep.metadataSource === "local-cache"
+                ? "Cached"
+                : episodeReleaseLabel(ep.airDate)}
           </span>
         )}
       </div>
     </div>
   );
+}
+
+function metadataGuideLabel(ep: Episode): string {
+  if (ep.metadataSource === "local-placeholder") return "Offline placeholder";
+  if (ep.metadataSource === "local-cache") return "Saved metadata";
+  return "Metadata only";
+}
+
+function metadataGuideDescription(ep: Episode): string {
+  if (ep.metadataSource === "local-placeholder") {
+    return "Numbered offline placeholder based on the known series count; no verified title, date, or playback source is available.";
+  }
+  if (ep.metadataSource === "local-cache") {
+    return "Saved episode metadata from this device. Choose a streaming source to watch this episode.";
+  }
+  return "Jikan metadata only. Choose a streaming source to watch this episode.";
 }
 
 function watchHref(

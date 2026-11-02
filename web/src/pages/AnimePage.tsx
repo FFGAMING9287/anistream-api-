@@ -8,7 +8,15 @@ import { MetricCard } from "../components/ui/MetricCard";
 import { SourcePicker, type SourceOption } from "../components/SourcePicker";
 import { EpisodeList } from "../components/EpisodeList";
 import { VideoPlayer } from "../components/VideoPlayer";
-import { api, CatalogSource, Episode, JikanAnime } from "../api";
+import {
+  api,
+  cacheJikanEpisodeGuide,
+  CatalogSource,
+  Episode,
+  getOfflineEpisodeGuide,
+  JikanAnime,
+  metadataEpisodesWithLocalFallback,
+} from "../api";
 import { proxyImageUrl } from "../lib/proxyImage";
 interface AnimeInfo {
   id: string;
@@ -29,6 +37,16 @@ interface MovieBoxMatch {
   title: string;
 }
 
+function episodeGuideMessage(source?: string): string {
+  if (source === "local-cache") {
+    return "Showing the saved episode guide from this device. These entries are not playable.";
+  }
+  if (source === "local-placeholder") {
+    return "Jikan is unavailable. Showing numbered placeholders from the known episode count; titles and streams are not verified.";
+  }
+  return "Showing Jikan episode metadata only; these entries have no playback streams.";
+}
+
 export default function AnimePage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
@@ -39,6 +57,7 @@ export default function AnimePage() {
   const [info, setInfo] = useState<AnimeInfo | null>(null);
   const [mal, setMal] = useState<JikanAnime | null>(null);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
+  const [episodeGuideTotal, setEpisodeGuideTotal] = useState<number | null>(null);
   const [streamId, setStreamId] = useState<string | null>(null);
   const [provider, setProvider] = useState<string | undefined>(providerParam);
   const [loading, setLoading] = useState(true);
@@ -118,11 +137,24 @@ export default function AnimePage() {
           malId: Number.isFinite(resolvedMal) ? resolvedMal : undefined,
           anilistId: Number.isFinite(resolvedAnilist) ? resolvedAnilist : undefined,
         });
-        setEpisodes(eps.episodes);
+        const guideEpisodes =
+          eps.metadataProvider === "jikan"
+            ? eps.episodes.map((episode) => ({
+                ...episode,
+                metadataOnly: true,
+                streamable: false,
+                metadataSource: "jikan" as const,
+              }))
+            : eps.episodes;
+        if (eps.metadataProvider === "jikan" && Number.isSafeInteger(resolvedMal) && resolvedMal! > 0) {
+          cacheJikanEpisodeGuide(resolvedMal!, { ...eps, episodes: guideEpisodes });
+        }
+        setEpisodes(guideEpisodes);
+        setEpisodeGuideTotal(eps.metadataOnly ? eps.totalEpisodes : null);
         setZenshinPlanned(eps.zenshin?.planned ?? null);
         const metadataOnly = Boolean(
           eps.metadataOnly ||
-            (eps.episodes.length > 0 && eps.episodes.every((ep) => ep.metadataOnly))
+            (guideEpisodes.length > 0 && guideEpisodes.every((ep) => ep.metadataOnly))
         );
         setStreamMeta(
           metadataOnly
@@ -134,25 +166,27 @@ export default function AnimePage() {
         );
         setStreamError(
           metadataOnly
-            ? "Showing Jikan episode metadata only. Choose a streaming source to watch episodes."
+            ? `${episodeGuideMessage(guideEpisodes[0]?.metadataSource)} Choose a streaming source to watch episodes.`
             : null
         );
       } catch {
-        let guide: Awaited<ReturnType<typeof api.metadataEpisodes>> | null = null;
-        if (Number.isFinite(resolvedMal) && resolvedMal! > 0) {
-          try {
-            guide = await api.metadataEpisodes(resolvedMal!);
-          } catch {
-            guide = null;
-          }
-        }
+        const episodeCountHint = Math.max(
+          Number(anime.stats.episodes.sub) || 0,
+          Number(anime.stats.episodes.dub) || 0
+        );
+        const guide =
+          Number.isSafeInteger(resolvedMal) && resolvedMal! > 0
+            ? getOfflineEpisodeGuide(resolvedMal!, episodeCountHint)
+            : null;
         if (guide?.episodes.length) {
           setEpisodes(guide.episodes);
+          setEpisodeGuideTotal(guide.totalEpisodes);
           setZenshinPlanned(null);
           setStreamMeta(null);
-          setStreamError("This provider's episode list is blocked. Jikan metadata is shown as a guide only; it has no playback links.");
+          setStreamError(`This provider's episode list is blocked. ${episodeGuideMessage(guide.metadataProvider)}`);
         } else {
           setEpisodes([]);
+          setEpisodeGuideTotal(null);
           setZenshinPlanned(null);
           setStreamMeta({ provider: activeProvider });
           setStreamError("This provider's episode list is temporarily blocked. Try Find sources or use MovieBox if available.");
@@ -328,6 +362,7 @@ export default function AnimePage() {
       setError(null);
       setStreamError(null);
       setEpisodes([]);
+      setEpisodeGuideTotal(null);
       setMovieBoxMatch(null);
       setMovieBoxStream(null);
       setStreamMeta(null);
@@ -361,15 +396,15 @@ export default function AnimePage() {
           const title = malData.title_english || malData.title;
           await discoverSources(title);
           if (cancelled) return;
-          try {
-            const guide = await api.metadataEpisodes(malData.mal_id);
-            if (cancelled) return;
-            if (guide.episodes.length > 0) {
-              setEpisodes(guide.episodes);
-              setStreamError("Jikan episode metadata is shown as a guide only; select a streaming source to watch.");
-            }
-          } catch {
-            /* episode metadata remains optional if Jikan is unavailable */
+          const guide = await metadataEpisodesWithLocalFallback(
+            malData.mal_id,
+            malData.episodes ?? 0
+          );
+          if (cancelled) return;
+          if (guide.episodes.length > 0) {
+            setEpisodes(guide.episodes);
+            setEpisodeGuideTotal(guide.totalEpisodes);
+            setStreamError(`${episodeGuideMessage(guide.metadataProvider)} Select a streaming source to watch.`);
           }
           return;
         }
@@ -392,16 +427,16 @@ export default function AnimePage() {
         if (cancelled) return;
         if (malData) {
           setInfo(malFromJikan(malData, animeId));
-          try {
-            const guide = await api.metadataEpisodes(malData.mal_id);
-            if (cancelled) return;
-            if (guide.episodes.length > 0) {
-              setEpisodes(guide.episodes);
-              setStreamError("Could not load provider details. Jikan episode metadata is shown as a guide only; no stream links are included.");
-            } else {
-              setStreamError(String(e));
-            }
-          } catch {
+          const guide = await metadataEpisodesWithLocalFallback(
+            malData.mal_id,
+            malData.episodes ?? 0
+          );
+          if (cancelled) return;
+          if (guide.episodes.length > 0) {
+            setEpisodes(guide.episodes);
+            setEpisodeGuideTotal(guide.totalEpisodes);
+            setStreamError(`Could not load provider details. ${episodeGuideMessage(guide.metadataProvider)}`);
+          } else {
             setStreamError(String(e));
           }
         } else {
@@ -447,14 +482,27 @@ export default function AnimePage() {
   }
 
   const streamableEpisodes = episodes.filter((ep) => ep.streamable !== false && !ep.metadataOnly);
-  const jikanOnlyGuide = episodes.length > 0 && episodes.every((ep) => ep.metadataOnly);
+  const metadataGuideOnly = episodes.length > 0 && episodes.every((ep) => ep.metadataOnly);
+  const jikanOnlyGuide =
+    metadataGuideOnly &&
+    episodes.every((ep) => ep.metadataSource === "jikan" || ep.metadataSource == null);
+  const cachedEpisodeGuide =
+    metadataGuideOnly && episodes.every((ep) => ep.metadataSource === "local-cache");
+  const offlinePlaceholderGuide =
+    metadataGuideOnly && episodes.every((ep) => ep.metadataSource === "local-placeholder");
+  const episodeGuideOnly = jikanOnlyGuide || cachedEpisodeGuide || offlinePlaceholderGuide;
   const catalogOnlyEpisodes = episodes.filter(
     (ep) => ep.streamable === false && !ep.metadataOnly
   );
 
   const streamableCount = streamableEpisodes.length;
   const malOfficial = mal?.episodes ?? null;
-  const seriesTotal = malOfficial && malOfficial > 0 ? malOfficial : episodes.length;
+  const seriesTotal =
+    malOfficial && malOfficial > 0
+      ? malOfficial
+      : episodeGuideTotal && episodeGuideTotal > 0
+        ? episodeGuideTotal
+        : episodes.length;
   const extrasInStream =
     malOfficial && malOfficial > 0 && streamableCount > malOfficial
       ? streamableCount - malOfficial
@@ -510,10 +558,14 @@ export default function AnimePage() {
                 <BadgePill variant="live">{streamableCount} streamable now</BadgePill>
               ) : jikanOnlyGuide ? (
                 <BadgePill variant="live">Jikan episode guide · {episodes.length}</BadgePill>
+              ) : cachedEpisodeGuide ? (
+                <BadgePill variant="live">Saved episode guide · {episodes.length}</BadgePill>
+              ) : offlinePlaceholderGuide ? (
+                <BadgePill variant="live">Offline placeholders · {episodes.length}</BadgePill>
               ) : seriesTotal > 0 ? (
                 <BadgePill variant="live">{seriesTotal} in series catalog</BadgePill>
               ) : null}
-              {seriesTotal > streamableCount && !jikanOnlyGuide && (
+              {seriesTotal > streamableCount && !episodeGuideOnly && (
                 <BadgePill>
                   {seriesTotal} episode series
                 </BadgePill>
@@ -691,11 +743,23 @@ export default function AnimePage() {
 
       {episodes.length > 0 && (
         <EditorialCard
-          tagline={jikanOnlyGuide ? "Jikan Episode Guide" : "Episode List"}
+          tagline={
+            jikanOnlyGuide
+              ? "Jikan Episode Guide"
+              : cachedEpisodeGuide
+                ? "Saved Episode Guide"
+                : offlinePlaceholderGuide
+                  ? "Offline Episode Placeholders"
+                  : "Episode List"
+          }
           title={
             jikanOnlyGuide
               ? `${episodes.length} episodes · metadata only`
-              : `${episodeCountLabel} — Stream or Save`
+              : cachedEpisodeGuide
+                ? `${episodes.length} saved metadata entries`
+                : offlinePlaceholderGuide
+                  ? `${episodes.length} numbered placeholders${seriesTotal > episodes.length ? ` · first ${episodes.length} of ${seriesTotal}` : ""}`
+                  : `${episodeCountLabel} — Stream or Save`
           }
           className="mt-10"
         >

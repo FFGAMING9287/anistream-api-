@@ -64,6 +64,7 @@ export interface Episode {
   score?: number | null;
   titleJapanese?: string | null;
   titleRomanji?: string | null;
+  metadataSource?: "jikan" | "local-cache" | "local-placeholder";
 }
 
 export interface EpisodesResponse {
@@ -253,3 +254,177 @@ export const api = {
     );
   },
 };
+
+const EPISODE_GUIDE_CACHE_PREFIX = "anistream:episode-guide:v1:";
+const EPISODE_GUIDE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_LOCAL_GUIDE_EPISODES = 500;
+
+function episodeGuideStorage(): Storage | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function markGuideEpisodes(
+  episodes: Episode[],
+  metadataSource: NonNullable<Episode["metadataSource"]>
+): Episode[] {
+  return episodes.map((episode) => ({
+    ...episode,
+    metadataOnly: true,
+    streamable: false,
+    metadataSource,
+  }));
+}
+
+export function cacheJikanEpisodeGuide(malId: number, response: EpisodesResponse): void {
+  if (!Number.isSafeInteger(malId) || malId < 1 || response.metadataProvider !== "jikan") return;
+  const storage = episodeGuideStorage();
+  if (!storage) return;
+
+  const episodes = response.episodes
+    .filter((episode) => episode.metadataOnly)
+    .slice(0, MAX_LOCAL_GUIDE_EPISODES)
+    .map((episode) => ({
+      ...episode,
+      metadataOnly: true,
+      streamable: false,
+      metadataSource: "jikan" as const,
+    }));
+  if (episodes.length === 0) return;
+
+  try {
+    storage.setItem(
+      `${EPISODE_GUIDE_CACHE_PREFIX}${malId}`,
+      JSON.stringify({
+        savedAt: Date.now(),
+        totalEpisodes: response.totalEpisodes,
+        hasMore: response.hasMore,
+        episodes,
+      })
+    );
+  } catch {
+    // Storage can be unavailable or full; the live response still works.
+  }
+}
+
+function readCachedJikanEpisodeGuide(malId: number): EpisodesResponse | null {
+  if (!Number.isSafeInteger(malId) || malId < 1) return null;
+  const storage = episodeGuideStorage();
+  if (!storage) return null;
+
+  try {
+    const raw = storage.getItem(`${EPISODE_GUIDE_CACHE_PREFIX}${malId}`);
+    if (!raw) return null;
+    const cached = JSON.parse(raw) as {
+      savedAt?: number;
+      totalEpisodes?: number;
+      hasMore?: boolean;
+      episodes?: unknown[];
+    };
+    if (
+      typeof cached.savedAt !== "number" ||
+      Date.now() - cached.savedAt > EPISODE_GUIDE_CACHE_TTL_MS ||
+      !Array.isArray(cached.episodes)
+    ) {
+      storage.removeItem(`${EPISODE_GUIDE_CACHE_PREFIX}${malId}`);
+      return null;
+    }
+
+    const validEpisodes = cached.episodes.filter(
+      (episode): episode is Episode =>
+        typeof episode === "object" &&
+        episode !== null &&
+        typeof (episode as Episode).episodeId === "string" &&
+        Number.isFinite((episode as Episode).number) &&
+        typeof (episode as Episode).title === "string" &&
+        typeof (episode as Episode).isFiller === "boolean"
+    );
+    const episodes = markGuideEpisodes(
+      validEpisodes.slice(0, MAX_LOCAL_GUIDE_EPISODES),
+      "local-cache"
+    );
+    if (episodes.length === 0) return null;
+
+    const cachedTotal = Number(cached.totalEpisodes);
+    return {
+      episodes,
+      totalEpisodes:
+        Number.isFinite(cachedTotal) && cachedTotal > 0
+          ? Math.max(episodes.length, cachedTotal)
+          : episodes.length,
+      hasMore: Boolean(cached.hasMore),
+      metadataOnly: true,
+      metadataProvider: "local-cache",
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function getOfflineEpisodeGuide(
+  malId: number,
+  episodeCountHint = 0
+): EpisodesResponse | null {
+  const cached = readCachedJikanEpisodeGuide(malId);
+  if (cached) return cached;
+  if (!Number.isSafeInteger(malId) || malId < 1) return null;
+
+  const numericCount = Number(episodeCountHint);
+  const count = Number.isFinite(numericCount)
+    ? Math.min(100_000, Math.max(0, Math.floor(numericCount)))
+    : 0;
+  if (count < 1) return null;
+  const shownCount = Math.min(count, MAX_LOCAL_GUIDE_EPISODES);
+  const episodes = Array.from({ length: shownCount }, (_, index): Episode => {
+    const number = index + 1;
+    return {
+      episodeId: `offline-${malId}-${number}`,
+      number,
+      title: `Episode ${number}`,
+      description: "Numbered offline placeholder only; verified episode details and playback are unavailable.",
+      isFiller: false,
+      streamable: false,
+      metadataOnly: true,
+      metadataSource: "local-placeholder",
+    };
+  });
+
+  return {
+    episodes,
+    totalEpisodes: count,
+    hasMore: count > shownCount,
+    metadataOnly: true,
+    metadataProvider: "local-placeholder",
+  };
+}
+
+export async function metadataEpisodesWithLocalFallback(
+  malId: number,
+  episodeCountHint = 0
+): Promise<EpisodesResponse> {
+  try {
+    const response = await api.metadataEpisodes(malId);
+    const guide: EpisodesResponse = {
+      ...response,
+      metadataProvider: response.metadataProvider ?? "jikan",
+      metadataOnly: true,
+      episodes: markGuideEpisodes(response.episodes ?? [], "jikan"),
+    };
+    if (guide.episodes.length > 0) cacheJikanEpisodeGuide(malId, guide);
+    if (guide.episodes.length > 0 || episodeCountHint <= 0) return guide;
+  } catch {
+    // Fall through to this device's saved guide or numbered placeholders.
+  }
+
+  return (
+    getOfflineEpisodeGuide(malId, episodeCountHint) ?? {
+      episodes: [],
+      totalEpisodes: 0,
+      metadataOnly: true,
+      metadataProvider: "unavailable",
+    }
+  );
+}
