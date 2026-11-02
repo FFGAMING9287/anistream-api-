@@ -820,6 +820,12 @@ function MovieBoxActionButton({
   async function handleAction() {
     setLoading(true);
     try {
+      if (action === "stream") {
+        const url = movieboxAnimeStreamUrl(match, ep);
+        onStream?.({ url, title: `${match.title} — Episode ${ep} (Hindi · 480p)` });
+        return;
+      }
+
       const data = await api.downloads(match.id, String(ep), match.detailPath);
       const payload = data as {
         data?: {
@@ -832,15 +838,11 @@ function MovieBoxActionButton({
       const source = sources[0];
       if (!source?.url) throw new Error("No playable MovieBox source for this episode.");
 
-      if (action === "stream") {
-        onStream?.({ url: source.url, title: `${match.title} — Episode ${ep}` });
-      } else {
-        const filename = `${match.title.replace(/[^a-z0-9_-]+/gi, "_")}_ep${ep}_${source.resolution ?? "HD"}p.mp4`;
-        const downloadUrl = new URL("https://movie-box-api.co08.art/api/download-mp4");
-        downloadUrl.searchParams.set("url", source.url);
-        downloadUrl.searchParams.set("filename", filename);
-        window.location.assign(downloadUrl.toString());
-      }
+      const filename = `${match.title.replace(/[^a-z0-9_-]+/gi, "_")}_ep${ep}_${source.resolution ?? "HD"}p.mp4`;
+      const downloadUrl = new URL("https://movie-box-api.co08.art/api/download-mp4");
+      downloadUrl.searchParams.set("url", source.url);
+      downloadUrl.searchParams.set("filename", filename);
+      window.location.assign(downloadUrl.toString());
     } catch {
       alert(action === "stream" ? "MovieBox stream unavailable for this episode." : "MovieBox download unavailable.");
     } finally {
@@ -858,6 +860,27 @@ function MovieBoxActionButton({
       {action === "stream" ? `MovieBox · Stream Ep ${ep}` : `MovieBox · Download Ep ${ep}`}
     </LuxuryButton>
   );
+}
+
+function movieboxAnimeStreamUrl(match: MovieBoxMatch, episode: number): string {
+  const slug =
+    match.title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") ||
+    match.id;
+  const season = 1;
+  const language = "hindi";
+  const quality = "480p";
+  const filename = `${slug}-s${season}e${episode}-${quality}`;
+  const url = new URL(
+    `/api/download/${encodeURIComponent(slug)}/s${season}/e${episode}/${language}/${quality}`,
+    "https://movie-box-api.co08.art"
+  );
+  url.searchParams.set("subjectId", match.id);
+  url.searchParams.set("detailPath", match.detailPath);
+  url.searchParams.set("filename", filename);
+  return url.toString();
 }
 
 function watchUrl(
