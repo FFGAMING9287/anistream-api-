@@ -247,6 +247,10 @@ export const api = {
       results?: { id: string; detailPath: string; title: string; poster?: string }[];
       available?: boolean;
     }>(`/api/downloads/search?q=${encodeURIComponent(q)}`),
+  downloadDetail: (id: string, detailPath: string) => {
+    const params = new URLSearchParams({ detailPath });
+    return get<unknown>(`/api/downloads/${encodeURIComponent(id)}?${params}`);
+  },
   downloads: (id: string, ep: string, detailPath: string, season = 1) => {
     const params = new URLSearchParams({ detailPath, season: String(season) });
     return get<unknown>(

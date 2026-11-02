@@ -821,8 +821,11 @@ function MovieBoxActionButton({
     setLoading(true);
     try {
       if (action === "stream") {
-        const url = movieboxAnimeStreamUrl(match, ep);
-        onStream?.({ url, title: `${match.title} — Episode ${ep} (Hindi · 480p)` });
+        const source = await movieboxAnimeStreamUrl(match, ep);
+        onStream?.({
+          url: source.url,
+          title: `${match.title} — Episode ${ep} (${source.language} · 480p)`,
+        });
         return;
       }
 
@@ -862,7 +865,43 @@ function MovieBoxActionButton({
   );
 }
 
-function movieboxAnimeStreamUrl(match: MovieBoxMatch, episode: number): string {
+async function movieboxAnimeStreamUrl(
+  match: MovieBoxMatch,
+  episode: number
+): Promise<{ url: string; language: string }> {
+  type AudioVariant = {
+    subjectId?: string | number;
+    detailPath?: string;
+    lanName?: string;
+    lanCode?: string;
+  };
+
+  let variants: AudioVariant[] = [];
+  try {
+    const detail = (await api.downloadDetail(match.id, match.detailPath)) as {
+      data?: { subject?: { dubs?: AudioVariant[] } };
+    };
+    variants = detail.data?.subject?.dubs ?? [];
+  } catch {
+    // Retain the matched MovieBox variant if optional detail lookup is unavailable.
+  }
+
+  const selected =
+    variants.find((variant) => /hindi\s*dub/i.test(variant.lanName ?? "")) ??
+    variants.find((variant) => String(variant.subjectId ?? "") === match.id) ??
+    variants.find((variant) => /english\s*dub/i.test(variant.lanName ?? ""));
+  const subjectId = String(selected?.subjectId ?? match.id);
+  const detailPath = selected?.detailPath ?? match.detailPath;
+  const languageName = selected?.lanName ?? "English";
+  const language =
+    selected?.lanCode?.toLowerCase() === "hi"
+      ? "hindi"
+      : selected?.lanCode?.toLowerCase() === "en"
+        ? "english"
+        : selected?.lanCode?.toLowerCase() === "ja"
+          ? "japanese"
+          : languageName.split(/\s+/)[0].toLowerCase();
+  const languageLabel = languageName.replace(/\s+(dub|sub)$/i, "");
   const slug =
     match.title
       .toLowerCase()
@@ -870,17 +909,16 @@ function movieboxAnimeStreamUrl(match: MovieBoxMatch, episode: number): string {
       .replace(/^-|-$/g, "") ||
     match.id;
   const season = 1;
-  const language = "hindi";
   const quality = "480p";
   const filename = `${slug}-s${season}e${episode}-${quality}`;
   const url = new URL(
     `/api/download/${encodeURIComponent(slug)}/s${season}/e${episode}/${language}/${quality}`,
     "https://movie-box-api.co08.art"
   );
-  url.searchParams.set("subjectId", match.id);
-  url.searchParams.set("detailPath", match.detailPath);
+  url.searchParams.set("subjectId", subjectId);
+  url.searchParams.set("detailPath", detailPath);
   url.searchParams.set("filename", filename);
-  return url.toString();
+  return { url: url.toString(), language: languageLabel };
 }
 
 function watchUrl(
