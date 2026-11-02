@@ -53,12 +53,17 @@ export interface Episode {
   number: number;
   title: string;
   isFiller: boolean;
+  isRecap?: boolean;
   airDate?: string;
   duration?: number;
   description?: string;
   image?: string;
   episodeType?: string;
   streamable?: boolean;
+  metadataOnly?: boolean;
+  score?: number | null;
+  titleJapanese?: string | null;
+  titleRomanji?: string | null;
 }
 
 export interface EpisodesResponse {
@@ -66,6 +71,9 @@ export interface EpisodesResponse {
   totalEpisodes: number;
   streamProvider?: string | null;
   category?: string | null;
+  metadataProvider?: string;
+  metadataOnly?: boolean;
+  hasMore?: boolean;
   zenshin?: {
     planned: number;
     streamable?: number;
@@ -139,6 +147,8 @@ export const api = {
     get<{ data: JikanAnime[] }>(`/api/metadata/search?q=${encodeURIComponent(q)}`),
   metadataById: (malId: number) =>
     get<{ data: JikanAnime }>(`/api/metadata/${malId}`),
+  metadataEpisodes: (malId: number) =>
+    get<EpisodesResponse>(`/api/metadata/${malId}/episodes`),
   metadataRelations: (malId: number) =>
     get<{ data: { relation: string; mal_id: number; name: string }[] }>(
       `/api/metadata/${malId}/relations`

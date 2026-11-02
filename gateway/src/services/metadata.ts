@@ -43,6 +43,55 @@ export async function metadataAnime(malId: string) {
   }
 }
 
+export interface EpisodeMetadata {
+  episodeId: string;
+  number: number;
+  title: string;
+  isFiller: boolean;
+  isRecap: boolean;
+  airDate?: string;
+  score?: number | null;
+  titleJapanese?: string | null;
+  titleRomanji?: string | null;
+  streamable: false;
+  metadataOnly: true;
+}
+
+export async function metadataEpisodes(malId: string) {
+  const response = await jikan.jikanEpisodes(malId);
+  const seen = new Set<number>();
+  const episodes: EpisodeMetadata[] = response.data
+    .filter((episode) => Number.isInteger(episode.mal_id) && episode.mal_id > 0)
+    .filter((episode) => {
+      if (seen.has(episode.mal_id)) return false;
+      seen.add(episode.mal_id);
+      return true;
+    })
+    .map((episode) => ({
+      episodeId: `jikan-${episode.mal_id}`,
+      number: episode.mal_id,
+      title: episode.title?.trim() || `Episode ${episode.mal_id}`,
+      isFiller: Boolean(episode.filler),
+      isRecap: Boolean(episode.recap),
+      airDate: episode.aired ?? undefined,
+      score: episode.score ?? null,
+      titleJapanese: episode.title_japanese ?? null,
+      titleRomanji: episode.title_romanji ?? null,
+      streamable: false,
+      metadataOnly: true,
+    }));
+
+  return {
+    episodes,
+    totalEpisodes: episodes.length,
+    streamProvider: null,
+    category: null,
+    metadataProvider: "jikan" as const,
+    metadataOnly: true as const,
+    hasMore: response.pagination.has_next_page,
+  };
+}
+
 export async function metadataRelations(malId: string) {
   try {
     return { data: await jikan.jikanRelations(malId) };

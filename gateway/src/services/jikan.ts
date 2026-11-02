@@ -13,12 +13,34 @@ export interface JikanAnime {
   genres: { name: string }[];
 }
 
+export interface JikanEpisode {
+  mal_id: number;
+  title: string | null;
+  title_japanese?: string | null;
+  title_romanji?: string | null;
+  aired?: string | null;
+  score?: number | null;
+  filler?: boolean;
+  recap?: boolean;
+}
+
+interface JikanEpisodePage {
+  data: JikanEpisode[];
+  pagination?: {
+    last_visible_page?: number;
+    has_next_page?: boolean;
+  };
+}
+
 const CACHE_MS = 5 * 60 * 1000;
 const MIN_INTERVAL_MS = 400;
 const MAX_RETRIES = 3;
+const MAX_CALLS_PER_MINUTE = 55;
+const MAX_EPISODE_PAGES = 15;
 
 const cache = new Map<string, { at: number; data: unknown }>();
 let lastCallAt = 0;
+const requestTimestamps: number[] = [];
 let chain: Promise<unknown> = Promise.resolve();
 
 function dedupeByMalId<T extends { mal_id: number }>(items: T[]): T[] {
@@ -31,9 +53,28 @@ function dedupeByMalId<T extends { mal_id: number }>(items: T[]): T[] {
 }
 
 async function throttle() {
-  const wait = MIN_INTERVAL_MS - (Date.now() - lastCallAt);
-  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-  lastCallAt = Date.now();
+  while (true) {
+    const now = Date.now();
+    while (requestTimestamps.length > 0 && now - requestTimestamps[0] >= 60_000) {
+      requestTimestamps.shift();
+    }
+
+    const spacingWait = MIN_INTERVAL_MS - (now - lastCallAt);
+    const minuteWait =
+      requestTimestamps.length >= MAX_CALLS_PER_MINUTE
+        ? requestTimestamps[0] + 60_000 - now
+        : 0;
+    const wait = Math.max(spacingWait, minuteWait);
+    if (wait > 0) {
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
+    }
+
+    const startedAt = Date.now();
+    requestTimestamps.push(startedAt);
+    lastCallAt = startedAt;
+    return;
+  }
 }
 
 async function jikanGet<T>(path: string): Promise<T> {
@@ -93,6 +134,36 @@ export async function jikanAnime(malId: string) {
   return jikanGet<{ data: JikanAnime & { trailer?: { embed_url?: string } } }>(
     `/anime/${malId}/full`
   );
+}
+
+export async function jikanEpisodes(malId: string) {
+  if (!/^[1-9]\d*$/.test(malId)) throw new Error("A valid MAL ID is required");
+
+  const firstPage = await jikanGet<JikanEpisodePage>(`/anime/${malId}/episodes`);
+  const episodes = [...(firstPage.data ?? [])];
+  const lastVisiblePage = Math.max(1, Number(firstPage.pagination?.last_visible_page ?? 1));
+  const finalPage = Math.min(lastVisiblePage, MAX_EPISODE_PAGES);
+  let hasNextPage = lastVisiblePage > finalPage;
+
+  for (let page = 2; page <= finalPage; page++) {
+    try {
+      const nextPage = await jikanGet<JikanEpisodePage>(
+        `/anime/${malId}/episodes?page=${page}`
+      );
+      episodes.push(...(nextPage.data ?? []));
+    } catch {
+      hasNextPage = true;
+      break;
+    }
+  }
+
+  return {
+    data: episodes,
+    pagination: {
+      last_visible_page: lastVisiblePage,
+      has_next_page: hasNextPage,
+    },
+  };
 }
 
 export interface JikanRelationEntry {

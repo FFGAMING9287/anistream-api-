@@ -295,6 +295,7 @@ Base URL: `http://localhost/api` (Docker) or `http://localhost:8787/api` (Vite d
 | `GET` | `/api/browse/home` | Season + top combined |
 | `GET` | `/api/metadata/search?q=` | MAL search |
 | `GET` | `/api/metadata/:malId` | Anime detail |
+| `GET` | `/api/metadata/:malId/episodes` | Jikan episode guide (metadata only; no playback links) |
 | `GET` | `/api/metadata/:malId/relations` | Franchise / season relations |
 | `GET` | `/api/zenshin/mappings` | Episode catalog mappings (`mal_id` or `anilist_id`) |
 
@@ -304,7 +305,7 @@ Base URL: `http://localhost/api` (Docker) or `http://localhost:8787/api` (Vite d
 |--------|------|-------------|
 | `GET` | `/api/anime/search?q=` | Multi-provider title search |
 | `GET` | `/api/anime/:id?provider=` | Provider-specific anime info |
-| `GET` | `/api/anime/:id/episodes` | Episode list (+ Zenshin enrichment) |
+| `GET` | `/api/anime/:id/episodes` | Provider episode list (+ Zenshin enrichment; Jikan metadata-only fallback if unavailable) |
 | `GET` | `/api/anime/:id/sources` | Catalog-level source discovery |
 | `POST` | `/api/anime/sources/refresh` | Refresh episode counts / `latestEpisode` |
 | `GET` | `/api/watch/:episodeId/sources` | Per-episode playable sources |

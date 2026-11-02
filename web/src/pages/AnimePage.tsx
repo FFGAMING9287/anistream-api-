@@ -120,16 +120,43 @@ export default function AnimePage() {
         });
         setEpisodes(eps.episodes);
         setZenshinPlanned(eps.zenshin?.planned ?? null);
-        setStreamMeta({
-          provider: eps.streamProvider ?? activeProvider,
-          category: eps.category ?? undefined,
-        });
-        setStreamError(null);
+        const metadataOnly = Boolean(
+          eps.metadataOnly ||
+            (eps.episodes.length > 0 && eps.episodes.every((ep) => ep.metadataOnly))
+        );
+        setStreamMeta(
+          metadataOnly
+            ? null
+            : {
+                provider: eps.streamProvider ?? activeProvider,
+                category: eps.category ?? undefined,
+              }
+        );
+        setStreamError(
+          metadataOnly
+            ? "Showing Jikan episode metadata only. Choose a streaming source to watch episodes."
+            : null
+        );
       } catch {
-        setEpisodes([]);
-        setZenshinPlanned(null);
-        setStreamMeta({ provider: activeProvider });
-        setStreamError("This provider's episode list is temporarily blocked. Try Find sources or use MovieBox if available.");
+        let guide: Awaited<ReturnType<typeof api.metadataEpisodes>> | null = null;
+        if (Number.isFinite(resolvedMal) && resolvedMal! > 0) {
+          try {
+            guide = await api.metadataEpisodes(resolvedMal!);
+          } catch {
+            guide = null;
+          }
+        }
+        if (guide?.episodes.length) {
+          setEpisodes(guide.episodes);
+          setZenshinPlanned(null);
+          setStreamMeta(null);
+          setStreamError("This provider's episode list is blocked. Jikan metadata is shown as a guide only; it has no playback links.");
+        } else {
+          setEpisodes([]);
+          setZenshinPlanned(null);
+          setStreamMeta({ provider: activeProvider });
+          setStreamError("This provider's episode list is temporarily blocked. Try Find sources or use MovieBox if available.");
+        }
       }
 
       return anime.name;
@@ -305,6 +332,8 @@ export default function AnimePage() {
       setMovieBoxStream(null);
       setStreamMeta(null);
       setZenshinPlanned(null);
+      setStreamId(null);
+      setProvider(providerParam);
 
       const parsedAnilist = anilistId ? Number(anilistId) : NaN;
       const hasMiruroId = providerParam === "miruro" || (Number.isFinite(parsedAnilist) && parsedAnilist > 0);
@@ -332,6 +361,16 @@ export default function AnimePage() {
           const title = malData.title_english || malData.title;
           await discoverSources(title);
           if (cancelled) return;
+          try {
+            const guide = await api.metadataEpisodes(malData.mal_id);
+            if (cancelled) return;
+            if (guide.episodes.length > 0) {
+              setEpisodes(guide.episodes);
+              setStreamError("Jikan episode metadata is shown as a guide only; select a streaming source to watch.");
+            }
+          } catch {
+            /* episode metadata remains optional if Jikan is unavailable */
+          }
           return;
         }
 
@@ -353,7 +392,18 @@ export default function AnimePage() {
         if (cancelled) return;
         if (malData) {
           setInfo(malFromJikan(malData, animeId));
-          setStreamError(String(e));
+          try {
+            const guide = await api.metadataEpisodes(malData.mal_id);
+            if (cancelled) return;
+            if (guide.episodes.length > 0) {
+              setEpisodes(guide.episodes);
+              setStreamError("Could not load provider details. Jikan episode metadata is shown as a guide only; no stream links are included.");
+            } else {
+              setStreamError(String(e));
+            }
+          } catch {
+            setStreamError(String(e));
+          }
         } else {
           setError(String(e));
         }
@@ -396,8 +446,11 @@ export default function AnimePage() {
     );
   }
 
-  const streamableEpisodes = episodes.filter((ep) => ep.streamable !== false);
-  const catalogOnlyEpisodes = episodes.filter((ep) => ep.streamable === false);
+  const streamableEpisodes = episodes.filter((ep) => ep.streamable !== false && !ep.metadataOnly);
+  const jikanOnlyGuide = episodes.length > 0 && episodes.every((ep) => ep.metadataOnly);
+  const catalogOnlyEpisodes = episodes.filter(
+    (ep) => ep.streamable === false && !ep.metadataOnly
+  );
 
   const streamableCount = streamableEpisodes.length;
   const malOfficial = mal?.episodes ?? null;
@@ -455,10 +508,12 @@ export default function AnimePage() {
             <div className="flex flex-wrap gap-2 mb-6">
               {streamableCount > 0 ? (
                 <BadgePill variant="live">{streamableCount} streamable now</BadgePill>
+              ) : jikanOnlyGuide ? (
+                <BadgePill variant="live">Jikan episode guide · {episodes.length}</BadgePill>
               ) : seriesTotal > 0 ? (
                 <BadgePill variant="live">{seriesTotal} in series catalog</BadgePill>
               ) : null}
-              {seriesTotal > streamableCount && (
+              {seriesTotal > streamableCount && !jikanOnlyGuide && (
                 <BadgePill>
                   {seriesTotal} episode series
                 </BadgePill>
@@ -634,15 +689,19 @@ export default function AnimePage() {
         </EditorialCard>
       )}
 
-      {episodes.length > 0 && streamId && (
+      {episodes.length > 0 && (
         <EditorialCard
-          tagline="Episode List"
-          title={`${episodeCountLabel} — Stream or Save`}
+          tagline={jikanOnlyGuide ? "Jikan Episode Guide" : "Episode List"}
+          title={
+            jikanOnlyGuide
+              ? `${episodes.length} episodes · metadata only`
+              : `${episodeCountLabel} — Stream or Save`
+          }
           className="mt-10"
         >
           <EpisodeList
             episodes={episodes}
-            streamId={streamId}
+            streamId={streamId ?? undefined}
             provider={provider}
             malId={malId}
             anilistId={anilistId}

@@ -117,6 +117,16 @@ app.get("/api/metadata/:malId", async (c) => {
   }
 });
 
+app.get("/api/metadata/:malId/episodes", async (c) => {
+  const malId = c.req.param("malId");
+  if (!/^[1-9]\d*$/.test(malId)) return c.json({ error: "valid MAL ID required" }, 400);
+  try {
+    return c.json(await metadata.metadataEpisodes(malId));
+  } catch (e) {
+    return c.json({ error: String(e) }, 502);
+  }
+});
+
 app.get("/api/metadata/:malId/relations", async (c) => {
   try {
     return c.json(await metadata.metadataRelations(c.req.param("malId")));
@@ -295,32 +305,58 @@ app.get("/api/anime/:id/episodes", async (c) => {
   async function enrich(result: { episodes: zenshin.EnrichedEpisode[]; totalEpisodes: number }) {
     let resolvedAnilist = anilistId;
     if (!resolvedAnilist && malId) {
-      const aid = await anilist.anilistIdFromMal(malId);
-      if (aid) resolvedAnilist = String(aid);
+      try {
+        const aid = await anilist.anilistIdFromMal(malId);
+        if (aid) resolvedAnilist = String(aid);
+      } catch {
+        /* optional ID mapping must not block episode metadata */
+      }
     }
     if (!malId && !resolvedAnilist) return result;
-    return zenshin.zenshinEnrichEpisodesResponse(result, { malId, anilistId: resolvedAnilist });
+    try {
+      return await zenshin.zenshinEnrichEpisodesResponse(result, { malId, anilistId: resolvedAnilist });
+    } catch {
+      return result;
+    }
+  }
+
+  async function withJikanFallback(
+    load: () => Promise<{ episodes: zenshin.EnrichedEpisode[]; totalEpisodes: number }>
+  ) {
+    try {
+      const result = await enrich(await load());
+      if (result.episodes.length > 0 || !malId) return c.json(result);
+      const guide = await metadata.metadataEpisodes(malId).catch(() => null);
+      return c.json(guide?.episodes.length ? guide : result);
+    } catch (e) {
+      if (malId) {
+        const guide = await metadata.metadataEpisodes(malId).catch(() => null);
+        if (guide?.episodes.length) return c.json(guide);
+      }
+      return c.json({ error: String(e) }, 502);
+    }
   }
 
   if (provider === "miruro") {
-    try {
+    return withJikanFallback(async () => {
       let miruroId = id;
       if (!id.includes("~") && malId) {
-        const aid = anilistId ?? String((await anilist.anilistIdFromMal(malId)) ?? "");
+        let aid = anilistId;
+        if (!aid) {
+          try {
+            aid = String((await anilist.anilistIdFromMal(malId)) ?? "");
+          } catch {
+            /* use the provider ID supplied by the client */
+          }
+        }
         if (aid) miruroId = aid;
       }
-      return c.json(await enrich(await miruro.miruroEpisodes(miruroId)));
-    } catch (e) {
-      return c.json({ error: String(e) }, 502);
-    }
+      return miruro.miruroEpisodes(miruroId);
+    });
   }
 
   if (provider === "anipub") {
-    try {
-      return c.json(await enrich(await anipub.anipubEpisodes(id)));
-    } catch (e) {
-      return c.json({ error: String(e) }, 502);
-    }
+    return withJikanFallback(() => anipub.anipubEpisodes(id));
   }
 
   if (provider === "hianime" || provider === "aniwatch") {
@@ -328,9 +364,11 @@ app.get("/api/anime/:id/episodes", async (c) => {
   }
 
   if (provider && provider !== "miruro" && provider !== "anipub") {
-    const hit = await consumet.consumetInfoAny(id, provider);
-    if (hit) return c.json(await enrich(consumet.toEpisodesResponse(hit.value.info)));
-    return c.json({ error: "Episodes not found" }, 502);
+    return withJikanFallback(async () => {
+      const hit = await consumet.consumetInfoAny(id, provider);
+      if (!hit) throw new Error("Episodes not found");
+      return consumet.toEpisodesResponse(hit.value.info);
+    });
   }
 
   return c.json(

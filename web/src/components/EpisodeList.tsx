@@ -18,21 +18,24 @@ export function EpisodeList({
   anilistId,
 }: {
   episodes: Episode[];
-  streamId: string;
+  streamId?: string;
   provider?: string;
   malId?: string | null;
   anilistId?: string | null;
 }) {
   const [view, setView] = useState<ViewMode>("grid");
   const pageSize = view === "grid" ? GRID_PAGE_SIZE : LIST_PAGE_SIZE;
+  const metadataOnly = episodes.length > 0 && episodes.every((ep) => ep.metadataOnly);
 
   return (
     <div className="episode-list">
       <div className="episode-list__toolbar">
         <p className="episode-list__hint font-sans text-xs text-taupe m-0">
-          {view === "grid"
-            ? "Tap an episode to watch. Switch to list view for synopses."
-            : "Detailed list with descriptions — fewer episodes per page."}
+          {metadataOnly
+            ? "Jikan episode guide only — these entries do not include playable streams."
+            : view === "grid"
+              ? "Tap an episode to watch. Switch to list view for synopses."
+              : "Detailed list with descriptions — fewer episodes per page."}
         </p>
         <div className="episode-view-toggle" role="tablist" aria-label="Episode layout">
           <button
@@ -92,7 +95,7 @@ export function EpisodeList({
 }
 
 function EpisodeTile({ ep, href }: { ep: Episode; href: string | null }) {
-  const streamable = ep.streamable !== false;
+  const streamable = ep.streamable !== false && !ep.metadataOnly;
   const className = [
     "episode-tile",
     streamable ? "episode-tile--streamable" : "episode-tile--catalog",
@@ -107,9 +110,13 @@ function EpisodeTile({ ep, href }: { ep: Episode; href: string | null }) {
       <span className="episode-tile__title">{ep.title || `Episode ${ep.number}`}</span>
       <span className="episode-tile__meta">
         {!streamable && (
-          <span className="episode-tile__tag">{episodeReleaseLabel(ep.airDate)}</span>
+          <span className="episode-tile__tag">
+            {ep.metadataOnly ? "Metadata only" : episodeReleaseLabel(ep.airDate)}
+          </span>
         )}
         {ep.isFiller && <span className="episode-tile__tag">Filler</span>}
+        {ep.isRecap && <span className="episode-tile__tag">Recap</span>}
+        {ep.score != null && <span className="episode-tile__tag">MAL {ep.score.toFixed(1)}</span>}
         {streamable && <span className="episode-tile__play" aria-hidden />}
       </span>
     </>
@@ -138,12 +145,12 @@ function EpisodeDetailRow({
   anilistId,
 }: {
   ep: Episode;
-  streamId: string;
+  streamId?: string;
   provider?: string;
   malId?: string | null;
   anilistId?: string | null;
 }) {
-  const streamable = ep.streamable !== false;
+  const streamable = ep.streamable !== false && !ep.metadataOnly;
   const href = streamable ? watchHref(streamId, ep, provider, malId, anilistId) : null;
 
   return (
@@ -158,17 +165,30 @@ function EpisodeDetailRow({
           <span className="font-sans text-xs font-semibold uppercase tracking-widest theme-accent-text">
             Ep {String(ep.number).padStart(2, "0")}
           </span>
-          {!streamable && <span className="badge-pill">Catalog only</span>}
+          {!streamable && (
+            <span className="badge-pill">{ep.metadataOnly ? "Metadata only" : "Catalog only"}</span>
+          )}
           {ep.isFiller && <span className="badge-pill">Filler</span>}
+          {ep.isRecap && <span className="badge-pill">Recap</span>}
+          {ep.score != null && <span className="badge-pill">MAL {ep.score.toFixed(1)}</span>}
         </div>
         <p className="font-sans text-sm font-medium m-0 line-clamp-1">
           {ep.title || `Episode ${ep.number}`}
         </p>
+        {(ep.titleJapanese || ep.titleRomanji) && (
+          <p className="font-sans text-xs text-taupe mt-1 mb-0 line-clamp-1">
+            {ep.titleJapanese}
+            {ep.titleJapanese && ep.titleRomanji ? " · " : ""}
+            {ep.titleRomanji}
+          </p>
+        )}
         <p className="font-sans text-xs text-taupe mt-1.5 mb-0 line-clamp-2 leading-relaxed">
           {ep.description ||
             (streamable
               ? "No episode synopsis available yet."
-              : "Scheduled in catalog — not uploaded yet.")}
+              : ep.metadataOnly
+                ? "Jikan metadata only. Choose a streaming source to watch this episode."
+                : "Scheduled in catalog — not uploaded yet.")}
         </p>
       </div>
       <div className="episode-row__actions flex gap-2 shrink-0 self-center">
@@ -189,12 +209,13 @@ function EpisodeDetailRow({
 }
 
 function watchHref(
-  streamId: string,
+  streamId: string | undefined,
   ep: Episode,
   provider?: string,
   mal?: string | null,
   anilist?: string | null
-): string {
+): string | null {
+  if (!streamId || ep.streamable === false || ep.metadataOnly) return null;
   const params = new URLSearchParams({ ep: String(ep.number) });
   if (provider) params.set("provider", provider);
   if (mal) params.set("mal", mal);
