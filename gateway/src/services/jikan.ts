@@ -88,13 +88,22 @@ async function jikanGet<T>(path: string): Promise<T> {
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       await throttle();
       try {
-        const data = await fetchJson<T>(url);
+        const data = await fetchJson<T>(url, {
+          headers: {
+            "User-Agent": "AniStream/1.0 (https://github.com/FFGAMING9287/anistream-api-)",
+          },
+        });
         cache.set(url, { at: Date.now(), data });
         return data;
       } catch (e) {
         const msg = String(e);
-        if (msg.includes("429") && attempt < MAX_RETRIES - 1) {
-          await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+        const retryable =
+          msg.includes("429") ||
+          msg.includes("fetch failed") ||
+          /ECONNRESET|ETIMEDOUT|EAI_AGAIN/.test(msg);
+        if (retryable && attempt < MAX_RETRIES - 1) {
+          const delay = msg.includes("429") ? 1200 * (attempt + 1) : 600 * (attempt + 1);
+          await new Promise((r) => setTimeout(r, delay));
           continue;
         }
         throw e;
